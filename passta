@@ -5,11 +5,6 @@
 import sys, os, shutil, tty, termios, subprocess, argparse, re, csv, StringIO
 from subprocess import PIPE
 
-PWD = os.environ.get('PASSTA_ENC_DIR')
-if None == PWD:
-  PWD = '.'
-DB = (PWD + '/passta.enc')
-EMAIL_ADDRESS = os.environ.get('PASSTA_EMAIL')
 ALGO = '-aes256'
 DEVNULL = open(os.devnull, 'wb')
 YES  = re.compile('y(?:es)?', re.IGNORECASE)
@@ -22,6 +17,18 @@ USER = 'User'
 PASSWORD = 'Password'
 NOTES = 'Notes'
 OPTIONAL = [ NOTES ]
+
+EMAIL_ADDRESS = os.environ.get('PASSTA_EMAIL')
+PWD = os.environ.get('PASSTA_ENC_DIR')
+if None == PWD:
+  PWD = './'
+else:
+  PWD == PWD.strip()
+  if '' == PWD:
+    PWD = './'
+  elif not PWD.endswith('/'):
+    PWD += '/'
+DB = (PWD + 'passta.enc')
 
 SECRET = '' # Set for debugging
 
@@ -135,7 +142,7 @@ def ask(field, default = '', confirm = False, allAlts = []):
       numFromEnd = len(result) - len(reply) # to move cursor position in the string
 
     numBlanks = len(lastResult) - len(result) if len(lastResult) - len(result) > 0 else 0
-    output = asterisks(result, field, toHide = '')
+    output = asterisks(result, field, toHide = MASTER_PASSWORD)
     output += numBlanks * ' ' + (numBlanks + numFromEnd) * '\b'
     lastResult = result
     flush()
@@ -190,7 +197,7 @@ def editRow(name, keys, match = {}):
 
 def getFile(desc, file):
   if not file or not os.path.isfile(file) or os.stat(file).st_size == 0:
-    file = ask(file + ' is not found or empty.  Path to ' + desc, 'sample.csv')
+    file = ask(file + ' is not found or empty.  Path to ' + desc, PWD + 'sample.csv')
     return getFile(desc, file)
   return file
 
@@ -251,8 +258,8 @@ parser = argparse.ArgumentParser()
 parser.add_argument(
     'command',
     nargs='?',
-    choices = ['update', 'delete', 'dump', 'raw', 'change-password'],
-    default = 'update',
+    choices = [ 'show', 'update', 'delete', 'dump', 'dump-raw', 'change-password'],
+    default = 'show',
     help = 'Command to run.')
 parser.add_argument('name', nargs='?', default = '', help = 'A name to update / delete')
 args = parser.parse_args()
@@ -287,12 +294,13 @@ if not args.command.startswith('dump'):
       break
 
 # Run the commands
-if args.command == 'update':
+if args.command == 'show' or args.command == 'update':
   if match:
-    display(match, keys)
-    if askYesOrNo('Update', False):
+    if args.command == 'update' and askYesOrNo('Update', True):
       rows.remove(match)
       editRow(name, keys, match)
+    else:
+      display(match, keys)
   else:
     editRow(name, keys)
 
@@ -300,8 +308,8 @@ elif args.command == 'delete':
   rows.remove(match)
   save()
 
-elif args.command == 'dump' or args.command == 'raw':
-  toHide = '' if args.command == 'raw' else PASSWORD
+elif args.command.startswith('dump'):
+  toHide = '' if args.command == 'dump-raw' else PASSWORD
   for tmp in rows:
     print(toStr(tmp, keys, toSkip = [], toHide = toHide))
 

@@ -2,41 +2,41 @@
 
 A few highlights:
 
-1. No additional requirements to run on OS X, other than the ~ 300 line Python script itself.
-2. Easy import from comma-separated values (CSV).
-3. Completely flexible entry fields; defined by the initially imported CSV headers:
+* No additional requirements to run on OS X, other than the ~ 300 line Python script itself.
+* Easy import from comma-separated values (CSV).
+* Completely flexible entry fields; defined by the initially imported CSV headers:
     * By default, the CSV header `Name` is an identifier and `Password` is hidden. 
     * Others can be whatever; no code change required.
-4. Passwords are saved to file; better offline than risk a provider [breach](https://blog.lastpass.com/2015/06/lastpass-security-notice.html/).
-5. Solid [AES-256](https://en.wikipedia.org/wiki/Advanced_Encryption_Standard) encryption via [OpenSSL](https://www.openssl.org/).
-6. CSV data can be dumped to stdout for easy export.
-7. Command-line 'magic' to:
+* Passwords are saved to file; better offline than risk a provider [breach](https://blog.lastpass.com/2015/06/lastpass-security-notice.html/).
+* Solid [AES-256](https://en.wikipedia.org/wiki/Advanced_Encryption_Standard) encryption via [OpenSSL](https://www.openssl.org/).
+* CSV data can be dumped to stdout for easy export.
+* Command-line 'magic' to:
     * Perform incremental searches across matches.
     * Rewrite stdout to hide passwords after a keypress (try it out!).
 
 
 ## Getting Started ##
 
-Firstly, download the script, make it executable and easily accessible.  For example:
+1. Download the script, make it executable and easily accessible...
 
     #!bash
     ~ $ wget https://bitbucket.org/exemplar/passta/raw/master/passta
     chmod a+x passta
     alias passta="~/passta"
 
-Optional: Set the location for the encrypted password file and a default email in your `~/.profile` for example:
+Optional: Set the location for the encrypted password file and a default email in your `~/.profile`...
 
     export PASSTA_ENC_DIR="~/backed-up"
     export PASSTA_EMAIL="me@mail.com"
 
-Then, open Terminal and get started.  To see the help...
+2. Open a console window and get started.  To see the help...
 
     #!bash
     usage: passta [-h]
                   [{update,delete,dump,raw,change-password}]
                   [name]
 
-Import a raw CSV...
+3. Import a raw CSV to get started...
 
     #!bash
     ~ $ passta
@@ -45,15 +45,22 @@ Import a raw CSV...
     Confirm Master password for encryption? ********************
     ~/passta.enc encrypted
 
-Print an existing record...
+4. Print an existing record...
 
+    #!bash
+    ~ $ ./passta show google  
+    Master password? ********************
+    Name=google,URL=https://google.com,User=myaccount@google.com,Password=BigSecret1,Notes=This is a sample google account.
+    
+... or...
+    
     #!bash
     ~ $ ./passta  
     Master password? ********************
     Name? google
     Name=google,URL=https://google.com,User=myaccount@google.com,Password=BigSecret1,Notes=This is a sample google account.
     
-Add a new record...
+5. Add a new record...
 
     #!bash
     ~ $ ./passta  
@@ -67,7 +74,7 @@ Add a new record...
     Save update? [yes] y
     ~/passta.enc encrypted
 
-Print data with hidden fields ('raw' will print all fields for easy export)...
+6. Export the data; 'dump' will mask hidden fields, 'raw' will print them out for for easy export...
 
     #!bash
     ~ $ ./passta dump  
