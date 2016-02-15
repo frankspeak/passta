@@ -5,9 +5,11 @@
 import sys, os, shutil, tty, termios, subprocess, argparse, re, csv, StringIO
 from subprocess import PIPE
 
-PWD = os.path.dirname(os.path.realpath(__file__)) # os.getcwd()
-PWD = '.'
+PWD = os.environ.get('PASSTA_ENC_DIR')
+if None == PWD:
+  PWD = '.'
 DB = (PWD + '/passta.enc')
+EMAIL_ADDRESS = os.environ.get('PASSTA_EMAIL')
 ALGO = '-aes256'
 DEVNULL = open(os.devnull, 'wb')
 YES  = re.compile('y(?:es)?', re.IGNORECASE)
@@ -19,26 +21,22 @@ URL = 'URL'
 USER = 'User'
 PASSWORD = 'Password'
 NOTES = 'Notes'
-TO_MASK = [ MASTER_PASSWORD, PASSWORD ]
 OPTIONAL = [ NOTES ]
 
 SECRET = '' # Set for debugging
-EMAIL_ADDRESS = os.environ.get('EMAIL_ADDRESS') # Could be hardcoded or whatever too...
 
-SAMPLE =  '''Name,URL,User,Password,Notes\n
-google,https://www.google.com,myaccount@gmail.com,BigSecret1,This is a sample google account.\n
-apple,https://www.apple.com,myaccount@gmail.com,BigSecret2,This is a sample apple account.\n
-'''
+def isPassword(field, toHide):
+  return toHide != '' and field.lower().endswith(toHide.lower())
 
 # dicts are unordered but keys are not
-def toStr(dict, keys, toSkip = [ NAME ], toHide = TO_MASK):
+def toStr(dict, keys, toSkip = [ NAME ], toHide = PASSWORD):
   str = ''
   delim = ''
   for key in keys:
     val = dict[key]
     if key in toSkip:
       continue
-    elif key in toHide:
+    elif isPassword(key, toHide):
       val = '*' * len(val)
     str += delim + key + '=' + val
     delim = ', '
@@ -66,7 +64,7 @@ def getch():
   return ch
 
 def display(match, keys):
-  sys.stdout.write(toStr(match, keys, toHide =[]))
+  sys.stdout.write(toStr(match, keys, toHide = ''))
   getch()
   flush()
   print(toStr(match, keys))
@@ -75,11 +73,10 @@ def query(field, default):
   return field + '? [' + default + '] ' if default else field + '? '
 
 # todo: Not exactly optimized
-def asterisks(str, field = '', maskFields = TO_MASK):
-  if field:
-    if not field in maskFields:
-       return str
-  return '*' * len(str)
+def asterisks(str, field = '', toHide = PASSWORD):
+  if isPassword(field, toHide):
+    return '*' * len(str)
+  return str
 
 def cycle(var, max, increment):
   if increment and var == max:
@@ -138,7 +135,7 @@ def ask(field, default = '', confirm = False, allAlts = []):
       numFromEnd = len(result) - len(reply) # to move cursor position in the string
 
     numBlanks = len(lastResult) - len(result) if len(lastResult) - len(result) > 0 else 0
-    output = asterisks(result, field, [ MASTER_PASSWORD ])
+    output = asterisks(result, field, toHide = '')
     output += numBlanks * ' ' + (numBlanks + numFromEnd) * '\b'
     lastResult = result
     flush()
@@ -153,7 +150,7 @@ def ask(field, default = '', confirm = False, allAlts = []):
   if not field in OPTIONAL and not result:
     result = default if default else ask(field, default, confirm, allAlts)
   if confirm:
-    if result != ask('Confirm ' + field, default, False, allAlts):
+    if result != ask('Confirm ' + field.lower(), default, False, allAlts):
       print(field + ' fields do not match')
       result = ask(field, default, True, allAlts)
 
@@ -192,14 +189,10 @@ def editRow(name, keys, match = {}):
 
 
 def getFile(desc, file):
-  if file and os.path.isfile(file):
-    if os.stat(file).st_size != 0:
-      return file
-    else:
-      file = ask(file + ' is empty.  Path to ' + desc, 'passta.csv')
-  else:
-    file = ask(file + ' not found.  Path to ' + desc, 'passta.csv')
-  return getFile(desc, file)
+  if not file or not os.path.isfile(file) or os.stat(file).st_size == 0:
+    file = ask(file + ' is not found or empty.  Path to ' + desc, 'sample.csv')
+    return getFile(desc, file)
+  return file
 
 def decrypt(key, file):
   cmd = [ 'openssl', 'enc', '-d', '-in', file, ALGO, '-k', secret ]
@@ -258,7 +251,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument(
     'command',
     nargs='?',
-    choices = ['update', 'delete', 'dump', 'dump-raw', 'change-password', 'create-sample'],
+    choices = ['update', 'delete', 'dump', 'raw', 'change-password'],
     default = 'update',
     help = 'Command to run.')
 parser.add_argument('name', nargs='?', default = '', help = 'A name to update / delete')
@@ -268,17 +261,14 @@ args = parser.parse_args()
 changed = False
 
 input = ''
-if args.command == 'create-sample':
-  input = SAMPLE
-else:
-  db = getFile('Password CSV', DB)
-  if not db.endswith('.enc'):
-    with open(db, 'r+') as f:
-      input = f.read()
+db = getFile('password CSV', DB)
+if not db.endswith('.enc'):
+  with open(db, 'r+') as f:
+    input = f.read()
 
 # Just import the file if it has not been encrypted
 if input:
-  secret = ask('Master password for encryption', confirm = True)
+  secret = ask('Encrypting master password', confirm = True)
   (keys, rows) = getCsv(input)
   encryptCsv(secret, keys, rows)
   sys.exit()
@@ -299,10 +289,10 @@ if not args.command.startswith('dump'):
 # Run the commands
 if args.command == 'update':
   if match:
+    display(match, keys)
     if askYesOrNo('Update', False):
       rows.remove(match)
       editRow(name, keys, match)
-    display(match, keys)
   else:
     editRow(name, keys)
 
@@ -310,8 +300,8 @@ elif args.command == 'delete':
   rows.remove(match)
   save()
 
-elif args.command.startswith('dump'):
-  toHide = [] if args.command == 'dump-raw' else TO_MASK
+elif args.command == 'dump' or args.command == 'raw':
+  toHide = '' if args.command == 'raw' else PASSWORD
   for tmp in rows:
     print(toStr(tmp, keys, toSkip = [], toHide = toHide))
 
