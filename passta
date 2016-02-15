@@ -1,0 +1,321 @@
+#!/usr/bin/python
+#
+# A nerd's password manager for OS X.
+
+import sys, os, shutil, tty, termios, subprocess, argparse, re, csv, StringIO
+from subprocess import PIPE
+
+PWD = os.path.dirname(os.path.realpath(__file__)) # os.getcwd()
+PWD = '.'
+DB = (PWD + '/passta.enc')
+ALGO = '-aes256'
+DEVNULL = open(os.devnull, 'wb')
+YES  = re.compile('y(?:es)?', re.IGNORECASE)
+
+# Fields
+MASTER_PASSWORD = 'Master password'
+NAME = 'Name'
+URL = 'URL'
+USER = 'User'
+PASSWORD = 'Password'
+NOTES = 'Notes'
+TO_MASK = [ MASTER_PASSWORD, PASSWORD ]
+OPTIONAL = [ NOTES ]
+
+SECRET = '' # Set for debugging
+EMAIL_ADDRESS = os.environ.get('EMAIL_ADDRESS') # Could be hardcoded or whatever too...
+
+SAMPLE =  '''Name,URL,User,Password,Notes\n
+google,https://www.google.com,myaccount@gmail.com,BigSecret1,This is a sample google account.\n
+apple,https://www.apple.com,myaccount@gmail.com,BigSecret2,This is a sample apple account.\n
+'''
+
+# dicts are unordered but keys are not
+def toStr(dict, keys, toSkip = [ NAME ], toHide = TO_MASK):
+  str = ''
+  delim = ''
+  for key in keys:
+    val = dict[key]
+    if key in toSkip:
+      continue
+    elif key in toHide:
+      val = '*' * len(val)
+    str += delim + key + '=' + val
+    delim = ', '
+  return str
+
+def toList(listOfDicts, key):
+  list = []
+  for dict in listOfDicts:
+    list.append(dict[key])
+  return list
+
+
+def flush():
+  print '\r',
+  sys.stdout.flush()
+
+def getch():
+  fd = sys.stdin.fileno()
+  old = termios.tcgetattr(fd)
+  try:
+    tty.setraw(sys.stdin.fileno())
+    ch = sys.stdin.read(1)
+  finally:
+    termios.tcsetattr(fd, termios.TCSADRAIN, old)
+  return ch
+
+def display(match, keys):
+  sys.stdout.write(toStr(match, keys, toHide =[]))
+  getch()
+  flush()
+  print(toStr(match, keys))
+
+def query(field, default):
+  return field + '? [' + default + '] ' if default else field + '? '
+
+# todo: Not exactly optimized
+def asterisks(str, field = '', maskFields = TO_MASK):
+  if field:
+    if not field in maskFields:
+       return str
+  return '*' * len(str)
+
+def cycle(var, max, increment):
+  if increment and var == max:
+    return 0
+  elif not increment and var == 0:
+    return max
+  return var + 1 if increment else var - 1
+
+def ask(field, default = '', confirm = False, allAlts = []):
+  # reply is what the user entered, result is what we return and output is what we display
+  reply = output = result = lastResult = ''
+  # fromEnd / alt are used for arrow keys; for pos in string and alts respectively
+  numFromEnd = numOfAlt = 0
+  alts = []
+
+  prompt = query(field, asterisks(default, field))
+  sys.stdout.write(prompt)
+  ch = getch()
+  while ch != '\r':
+    if ch == '\x03': # ctrl^c
+      print('')
+      sys.exit()
+
+    elif ch == '\x1b': # Arrow keys in pythons are 3 separate chars...
+      ch = getch()
+      if ch == '[':
+        ch = getch()
+        if ch == 'A' or ch == 'B': # up or down arrows; down increases the array index
+          if len(alts) > 0:
+            increment = ch == 'B'
+            numOfAlt = cycle(numOfAlt, len(alts) - 1, increment)
+            result = alts[numOfAlt]
+            numFromEnd = len(result) - len(reply)
+          else:
+            result = reply
+        elif ch == 'C' or ch == 'D': # right or left; left increases distance from end
+          increment = ch == 'D'
+          numFromEnd = cycle(numFromEnd, len(result), increment)
+          reply = result[:-numFromEnd]
+    else:
+      if ch == '\x08' or ch == '\x7f': # Backspaces.
+        reply = reply[:-1]
+      elif ch > '\x1f': # Stuff we can display
+        reply += ch
+
+      numOfAlt = 0
+      result = reply
+      alts = []
+      if reply and allAlts:
+        for tmp in allAlts:
+          if tmp.startswith(reply):
+            alts.append(tmp)
+        if len(alts) > 0:
+          result = alts[0]
+
+      numFromEnd = len(result) - len(reply) # to move cursor position in the string
+
+    numBlanks = len(lastResult) - len(result) if len(lastResult) - len(result) > 0 else 0
+    output = asterisks(result, field, [ MASTER_PASSWORD ])
+    output += numBlanks * ' ' + (numBlanks + numFromEnd) * '\b'
+    lastResult = result
+    flush()
+    sys.stdout.write(prompt + output)
+    ch = getch()
+
+  # We're done!
+  flush()
+  output = prompt + asterisks(result, field)
+  print(output)
+
+  if not field in OPTIONAL and not result:
+    result = default if default else ask(field, default, confirm, allAlts)
+  if confirm:
+    if result != ask('Confirm ' + field, default, False, allAlts):
+      print(field + ' fields do not match')
+      result = ask(field, default, True, allAlts)
+
+  return result
+
+def askAll(dict, keys, toSkip = []):
+  changed = False
+  for key in keys:
+    default = dict[key] if key in dict else ''
+    if key in toSkip:
+      continue
+    val = ask(key, default)
+    # Use the key to generate the URL if we're adding a new entry.
+    if not val == default:
+      dict[key] = val
+      changed = True
+  return changed
+
+def askYesOrNo(prompt, yes = True):
+  default = 'yes' if yes else 'no'
+  response = ask(prompt, default, allAlts = [ 'yes', 'no' ])
+  return YES.match(response)
+
+def editRow(name, keys, match = {}):
+  toSkip = []
+  if not match:
+    if askYesOrNo('\'' + name + '\' not found.  Create it'):
+      match = { NAME : name, URL : 'http://www.' + name, USER : EMAIL_ADDRESS }
+      # toSkip = [ NAME ]
+    else:
+      sys.exit()
+  changed = askAll(match, keys, toSkip)
+  if changed:
+    rows.append(match)
+    save()
+
+
+def getFile(desc, file):
+  if file and os.path.isfile(file):
+    if os.stat(file).st_size != 0:
+      return file
+    else:
+      file = ask(file + ' is empty.  Path to ' + desc, 'passta.csv')
+  else:
+    file = ask(file + ' not found.  Path to ' + desc, 'passta.csv')
+  return getFile(desc, file)
+
+def decrypt(key, file):
+  cmd = [ 'openssl', 'enc', '-d', '-in', file, ALGO, '-k', secret ]
+  proc = subprocess.Popen(cmd, stdout = PIPE, stderr = PIPE)
+  proc.wait()
+  if proc.returncode != 0:
+    err = proc.stderr.read()
+    print('Failed to decrypt data: Likely invalid password') # Ignore err for now
+    sys.exit()
+  return proc.stdout.read()
+
+def getCsv(data):
+  rows = []
+  reader = csv.DictReader(StringIO.StringIO(data), delimiter=',')
+  keys = reader.fieldnames
+  for tmp in reader:
+    rows.append(tmp)
+  return (keys, rows)
+
+def encrypt(secret, file, data):
+  backup = file + '.backup'
+  if os.path.isfile(file):
+    shutil.move(file, backup)
+  # Use openssl directly to avoid any external / pip dependencies
+  cmd = [ 'openssl', 'enc', '-e', '-out', file, ALGO, '-k', secret ]
+  proc = subprocess.Popen(cmd, stdin = PIPE, stderr = PIPE)
+  proc.communicate(data)[0]
+  if proc.returncode != 0:
+    err = proc.stderr.read()
+    if os.path.isfile(backup):
+      print('Failed to encrypt data (restoring ' + file  + '):' + err)
+      shutil.copy(backup, file)
+    else:
+      print('Failed to encrypt data: ' + err)
+    sys.exit()
+  else:
+    print(file + ' encrypted')
+
+def encryptCsv(secret, keys, rows, file = DB):
+  data = StringIO.StringIO()
+  writer = csv.DictWriter(data, keys)
+  writer.writeheader()
+  writer.writerows(rows)
+  encrypt(secret, file, data.getvalue())
+
+def save():
+  if askYesOrNo('Save update'):
+    encryptCsv(secret, keys, rows)
+  else:
+    print('Changes not saved')
+
+# LET'S GO!
+
+# Parse arguments
+parser = argparse.ArgumentParser()
+parser.add_argument(
+    'command',
+    nargs='?',
+    choices = ['update', 'delete', 'dump', 'dump-raw', 'change-password', 'create-sample'],
+    default = 'update',
+    help = 'Command to run.')
+parser.add_argument('name', nargs='?', default = '', help = 'A name to update / delete')
+args = parser.parse_args()
+
+# Will set if we need to save the file
+changed = False
+
+input = ''
+if args.command == 'create-sample':
+  input = SAMPLE
+else:
+  db = getFile('Password CSV', DB)
+  if not db.endswith('.enc'):
+    with open(db, 'r+') as f:
+      input = f.read()
+
+# Just import the file if it has not been encrypted
+if input:
+  secret = ask('Master password for encryption', confirm = True)
+  (keys, rows) = getCsv(input)
+  encryptCsv(secret, keys, rows)
+  sys.exit()
+
+secret = ask(MASTER_PASSWORD) if not SECRET else SECRET
+input = decrypt(secret, db)
+(keys, rows) = getCsv(input)
+
+# Find a match
+match = {}
+if not args.command.startswith('dump'):
+  name = args.name if args.name else ask(NAME, allAlts = toList(rows, NAME))
+  for tmp in rows:
+    if name == tmp[NAME]:
+      match = tmp
+      break
+
+# Run the commands
+if args.command == 'update':
+  if match:
+    if askYesOrNo('Update', False):
+      rows.remove(match)
+      editRow(name, keys, match)
+    display(match, keys)
+  else:
+    editRow(name, keys)
+
+elif args.command == 'delete':
+  rows.remove(match)
+  save()
+
+elif args.command.startswith('dump'):
+  toHide = [] if args.command == 'dump-raw' else TO_MASK
+  for tmp in rows:
+    print(toStr(tmp, keys, toSkip = [], toHide = toHide))
+
+elif args.command == 'change-password':
+  secret = ask(MASTER_PASSWORD, default = secret, confirm = True)
+  save()
+
