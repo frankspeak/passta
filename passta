@@ -1,6 +1,10 @@
 #!/usr/bin/python
 #
-# A nerd's password manager for OS X.
+# A Geek's Password Manager for OS X.
+#
+# Notes:
+# - Given that variables in Python loops aren't constrained to that scope, have used the
+#   var `tmp` in every case that I don't wish to reuse it later.
 
 import sys, os, shutil, tty, termios, subprocess, argparse, re, csv, StringIO
 from subprocess import PIPE
@@ -258,10 +262,10 @@ parser = argparse.ArgumentParser()
 parser.add_argument(
     'command',
     nargs='?',
-    choices = [ 'show', 'update', 'delete', 'dump', 'dump-raw', 'change-password'],
+    choices = [ 'show', 'edit', 'delete', 'dump', 'dump-raw', 'change-password'],
     default = 'show',
     help = 'Command to run.')
-parser.add_argument('name', nargs='?', default = '', help = 'A name to update / delete')
+parser.add_argument('name', nargs='?', default = '', help = 'A name to show / edit / delete')
 args = parser.parse_args()
 
 # Will set if we need to save the file
@@ -294,9 +298,9 @@ if not args.command.startswith('dump'):
       break
 
 # Run the commands
-if args.command == 'show' or args.command == 'update':
+if args.command == 'show' or args.command == 'edit':
   if match:
-    if args.command == 'update' and askYesOrNo('Update', True):
+    if args.command == 'edit' and askYesOrNo('Edit', True):
       rows.remove(match)
       editRow(name, keys, match)
     else:
